@@ -2,10 +2,7 @@
 builder = "dockerfile"
 
 [deploy]
-healthcheckPath = "/api/financeiro/config"
-healthcheckTimeout = 30
+healthcheckPath = "/health"
+healthcheckTimeout = 60
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
-
-[[volumes]]
-mountPath = "/app/data"

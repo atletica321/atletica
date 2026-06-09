@@ -1,274 +1,268 @@
-const Database = require('better-sqlite3');
-const path = require('path');
-const bcrypt = require('bcryptjs');
+const { Pool } = require('pg');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '../data/atletica.db');
+let pool;
 
-let db;
-
-function getDb() {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
-    initializeSchema();
+function getPool() {
+  if (!pool) {
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+    });
   }
-  return db;
+  return pool;
 }
 
-function initializeSchema() {
-  const database = db;
+// Helper: run a query
+async function query(sql, params = []) {
+  const client = getPool();
+  const res = await client.query(sql, params);
+  return res;
+}
 
-  // Users / Directors
-  database.exec(`
+// Helper: get single row
+async function get(sql, params = []) {
+  const res = await query(sql, params);
+  return res.rows[0] || null;
+}
+
+// Helper: get all rows
+async function all(sql, params = []) {
+  const res = await query(sql, params);
+  return res.rows;
+}
+
+// Helper: run insert/update/delete, returns rowCount and insertId
+async function run(sql, params = []) {
+  const res = await query(sql, params);
+  return { rowCount: res.rowCount, rows: res.rows };
+}
+
+async function initializeSchema() {
+  const bcrypt = require('bcryptjs');
+
+  await query(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       senha TEXT NOT NULL,
       cargo TEXT DEFAULT 'diretor',
       ativo INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Members (Socios)
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS socios (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       email TEXT,
       telefone TEXT,
       matricula TEXT UNIQUE,
       curso TEXT,
       plano TEXT DEFAULT 'mensal',
-      valor_mensalidade REAL DEFAULT 0,
+      valor_mensalidade NUMERIC DEFAULT 0,
       status TEXT DEFAULT 'ativo',
       data_inicio TEXT,
       data_fim TEXT,
       observacoes TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Pagamentos de socios
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS pagamentos_socios (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      socio_id INTEGER NOT NULL,
-      valor REAL NOT NULL,
+      id SERIAL PRIMARY KEY,
+      socio_id INTEGER NOT NULL REFERENCES socios(id) ON DELETE CASCADE,
+      valor NUMERIC NOT NULL,
       mes_referencia TEXT,
       ano_referencia INTEGER,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
-      pix_txid TEXT,
-      pix_qrcode TEXT,
       data_vencimento TEXT,
-      data_pagamento TEXT,
+      data_pagamento TIMESTAMP,
       observacoes TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      FOREIGN KEY (socio_id) REFERENCES socios(id)
-    );
+      created_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Eventos / Festas
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS eventos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       descricao TEXT,
       data_evento TEXT,
       local TEXT,
       capacidade INTEGER DEFAULT 0,
-      valor_ingresso REAL DEFAULT 0,
+      valor_ingresso NUMERIC DEFAULT 0,
       status TEXT DEFAULT 'ativo',
       imagem_url TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Lotes de ingressos
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS lotes_ingresso (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      evento_id INTEGER NOT NULL,
+      id SERIAL PRIMARY KEY,
+      evento_id INTEGER NOT NULL REFERENCES eventos(id) ON DELETE CASCADE,
       nome TEXT NOT NULL,
       quantidade INTEGER DEFAULT 0,
-      valor REAL DEFAULT 0,
+      valor NUMERIC DEFAULT 0,
       data_inicio TEXT,
       data_fim TEXT,
-      status TEXT DEFAULT 'ativo',
-      FOREIGN KEY (evento_id) REFERENCES eventos(id)
-    );
+      status TEXT DEFAULT 'ativo'
+    )
   `);
 
-  // Ingressos
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS ingressos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       codigo TEXT UNIQUE NOT NULL,
-      evento_id INTEGER NOT NULL,
-      lote_id INTEGER,
+      evento_id INTEGER NOT NULL REFERENCES eventos(id),
+      lote_id INTEGER REFERENCES lotes_ingresso(id),
       nome_comprador TEXT NOT NULL,
       email_comprador TEXT,
       telefone_comprador TEXT,
       nome_portador TEXT,
       email_portador TEXT,
-      valor REAL NOT NULL,
+      valor NUMERIC NOT NULL,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
-      pix_txid TEXT,
-      pix_qrcode TEXT,
-      data_compra TEXT DEFAULT (datetime('now','localtime')),
-      data_pagamento TEXT,
+      data_compra TIMESTAMP DEFAULT NOW(),
+      data_pagamento TIMESTAMP,
       transferido INTEGER DEFAULT 0,
       historico_transferencias TEXT DEFAULT '[]',
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      FOREIGN KEY (evento_id) REFERENCES eventos(id),
-      FOREIGN KEY (lote_id) REFERENCES lotes_ingresso(id)
-    );
+      created_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Produtos (loja / bar)
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS produtos (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       descricao TEXT,
       categoria TEXT,
-      preco_custo REAL DEFAULT 0,
-      preco_venda REAL DEFAULT 0,
+      preco_custo NUMERIC DEFAULT 0,
+      preco_venda NUMERIC DEFAULT 0,
       estoque INTEGER DEFAULT 0,
       estoque_minimo INTEGER DEFAULT 5,
       ativo INTEGER DEFAULT 1,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Vendas
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS vendas (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       tipo TEXT DEFAULT 'produto',
       descricao TEXT,
-      valor_total REAL DEFAULT 0,
-      desconto REAL DEFAULT 0,
+      valor_total NUMERIC DEFAULT 0,
+      desconto NUMERIC DEFAULT 0,
       metodo_pagamento TEXT,
-      status TEXT DEFAULT 'pendente',
-      pix_txid TEXT,
-      pix_qrcode TEXT,
-      operador_id INTEGER,
-      data_venda TEXT DEFAULT (datetime('now','localtime')),
-      observacoes TEXT,
-      FOREIGN KEY (operador_id) REFERENCES users(id)
-    );
+      status TEXT DEFAULT 'pago',
+      operador_id INTEGER REFERENCES users(id),
+      data_venda TIMESTAMP DEFAULT NOW(),
+      observacoes TEXT
+    )
   `);
 
-  // Itens de venda
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS itens_venda (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      venda_id INTEGER NOT NULL,
-      produto_id INTEGER,
+      id SERIAL PRIMARY KEY,
+      venda_id INTEGER NOT NULL REFERENCES vendas(id) ON DELETE CASCADE,
+      produto_id INTEGER REFERENCES produtos(id),
       descricao TEXT,
       quantidade INTEGER DEFAULT 1,
-      preco_unitario REAL DEFAULT 0,
-      subtotal REAL DEFAULT 0,
-      FOREIGN KEY (venda_id) REFERENCES vendas(id),
-      FOREIGN KEY (produto_id) REFERENCES produtos(id)
-    );
+      preco_unitario NUMERIC DEFAULT 0,
+      subtotal NUMERIC DEFAULT 0
+    )
   `);
 
-  // Contas a pagar
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS contas_pagar (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       descricao TEXT NOT NULL,
       fornecedor TEXT,
       categoria TEXT,
-      valor REAL NOT NULL,
+      valor NUMERIC NOT NULL,
       data_vencimento TEXT NOT NULL,
-      data_pagamento TEXT,
+      data_pagamento TIMESTAMP,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
-      comprovante TEXT,
       recorrente INTEGER DEFAULT 0,
       observacoes TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Contas a receber
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS contas_receber (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       descricao TEXT NOT NULL,
       cliente TEXT,
       categoria TEXT,
-      valor REAL NOT NULL,
+      valor NUMERIC NOT NULL,
       data_vencimento TEXT NOT NULL,
-      data_recebimento TEXT,
+      data_recebimento TIMESTAMP,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
-      pix_txid TEXT,
       observacoes TEXT,
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Caixa - movimentações
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS caixa (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       tipo TEXT NOT NULL,
       categoria TEXT,
       descricao TEXT NOT NULL,
-      valor REAL NOT NULL,
+      valor NUMERIC NOT NULL,
       referencia_tipo TEXT,
       referencia_id INTEGER,
-      saldo_anterior REAL DEFAULT 0,
-      saldo_posterior REAL DEFAULT 0,
-      operador_id INTEGER,
-      data_movimentacao TEXT DEFAULT (datetime('now','localtime')),
-      observacoes TEXT,
-      FOREIGN KEY (operador_id) REFERENCES users(id)
-    );
+      saldo_anterior NUMERIC DEFAULT 0,
+      saldo_posterior NUMERIC DEFAULT 0,
+      operador_id INTEGER REFERENCES users(id),
+      data_movimentacao TIMESTAMP DEFAULT NOW(),
+      observacoes TEXT
+    )
   `);
 
-  // Configurações
-  database.exec(`
+  await query(`
     CREATE TABLE IF NOT EXISTS configuracoes (
       chave TEXT PRIMARY KEY,
       valor TEXT,
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
   `);
 
-  // Seed admin user if not exists
-  const adminExists = database.prepare('SELECT id FROM users WHERE email = ?').get('admin@atletica.com');
-  if (!adminExists) {
+  // Seed admin
+  const admin = await get('SELECT id FROM users WHERE email = $1', ['admin@atletica.com']);
+  if (!admin) {
     const hash = bcrypt.hashSync('admin123', 10);
-    database.prepare(`
-      INSERT INTO users (nome, email, senha, cargo) VALUES (?, ?, ?, ?)
-    `).run('Administrador', 'admin@atletica.com', hash, 'admin');
+    await query('INSERT INTO users (nome, email, senha, cargo) VALUES ($1, $2, $3, $4)',
+      ['Administrador', 'admin@atletica.com', hash, 'admin']);
   }
 
-  // Seed config
+  // Seed configs
   const configs = [
     ['nome_atletica', 'Atlética Universitária'],
     ['saldo_caixa', '0'],
     ['pix_chave', ''],
     ['pix_tipo', 'email'],
-    ['cor_primaria', '#1a1a2e'],
+    ['cor_primaria', '#6c63ff'],
   ];
-  const insertConfig = database.prepare('INSERT OR IGNORE INTO configuracoes (chave, valor) VALUES (?, ?)');
-  configs.forEach(([k, v]) => insertConfig.run(k, v));
+  for (const [k, v] of configs) {
+    await query('INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING', [k, v]);
+  }
+
+  console.log('✅ Schema inicializado');
 }
 
-module.exports = { getDb };
+module.exports = { query, get, all, run, initializeSchema };

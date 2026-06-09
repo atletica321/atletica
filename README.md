@@ -1,69 +1,62 @@
 # ⚡ Atlética — Sistema de Gestão
 
-Sistema completo para gestão de atléticas universitárias.
+## Deploy no Railway (passo a passo)
 
-## Funcionalidades
+### 1. Criar o projeto no Railway
 
-- **Dashboard** — Visão geral financeira com gráficos
-- **Sócios** — Cadastro, mensalidades, relatórios de receita anual/mensal
-- **Eventos & Ingressos** — Festas, lotes, venda e transferência de ingressos
-- **Caixa** — Controle completo com histórico de movimentações
-- **Contas a Pagar/Receber** — Gestão financeira completa
-- **Produtos & Vendas** — Controle de estoque e PDV
-- **Usuários** — Criação e gerenciamento de diretores (admin only)
-- **Configurações** — PIX, nome da atlética, senha
+1. Acesse [railway.app](https://railway.app) e crie um projeto novo
+2. Clique em **"Add Service" → "Database" → "PostgreSQL"**
+3. Clique em **"Add Service" → "GitHub Repo"** (ou "Empty Service")
 
-## Deploy no Railway
-
-### Pré-requisitos
-- Conta no [Railway](https://railway.app)
-- Git instalado
-
-### Passo a passo
+### 2. Subir o código
 
 ```bash
-# 1. Inicialize git
+# Na pasta do projeto:
 git init
 git add .
-git commit -m "initial commit"
+git commit -m "deploy"
 
-# 2. Instale a CLI do Railway
 npm install -g @railway/cli
-
-# 3. Login e deploy
 railway login
-railway init
+railway link   # selecione o projeto criado
 railway up
 ```
 
-### Variáveis de ambiente (opcionais)
-No dashboard do Railway, em "Variables":
-```
-JWT_SECRET=sua-chave-secreta-muito-segura-aqui
-DB_PATH=/app/data/atletica.db
-```
+### 3. Configurar variável de ambiente
 
-### Volume persistente
-O Railway cria automaticamente o volume `/app/data` para o banco SQLite.
+No painel do Railway, no seu serviço Node.js:
+- Vá em **Variables**
+- Clique em **"Add Variable Reference"** e selecione `DATABASE_URL` do serviço PostgreSQL
+- Adicione também:
+  ```
+  JWT_SECRET=uma-chave-secreta-forte-aqui
+  NODE_ENV=production
+  ```
 
-## Acesso inicial
+### 4. Acessar o sistema
 
-- **URL**: fornecida pelo Railway após o deploy
-- **Email**: `admin@atletica.com`
-- **Senha**: `admin123`
+Após o deploy, o Railway fornecerá uma URL pública.
 
-⚠️ **Troque a senha padrão imediatamente após o primeiro acesso em Configurações!**
+- **Email:** `admin@atletica.com`
+- **Senha:** `admin123`
 
-## Desenvolvimento local
+> ⚠️ Troque a senha padrão imediatamente em **Configurações**!
 
-```bash
-npm install
-npm start
-# Acesse: http://localhost:3000
-```
+---
+
+## Funcionalidades
+
+- 📊 Dashboard com gráfico anual
+- 👥 Sócios + mensalidades + relatórios
+- 🎟️ Eventos, lotes de ingressos, transferência de ingresso
+- 💰 Caixa completo com histórico
+- 📋 Contas a pagar e receber
+- 🛒 Produtos, estoque e PDV
+- 🔐 Gestão de usuários (admin)
+- ⚙️ Configurações (PIX, nome, senha)
 
 ## Stack
-- **Backend**: Node.js + Express
-- **Banco**: SQLite (better-sqlite3)
-- **Frontend**: HTML/CSS/JS vanilla
-- **Auth**: JWT
+- **Backend:** Node.js + Express
+- **Banco:** PostgreSQL (Railway)
+- **Frontend:** HTML/CSS/JS vanilla (SPA)
+- **Auth:** JWT
