@@ -4,34 +4,50 @@ let pool;
 
 function getPool() {
   if (!pool) {
-    pool = new Pool({
+    const config = {
       connectionString: process.env.DATABASE_URL,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      connectionTimeoutMillis: 10000,
+      idleTimeoutMillis: 30000,
+      max: 10,
+    };
+
+    // Railway PostgreSQL sempre precisa de SSL
+    if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('railway')) {
+      config.ssl = { rejectUnauthorized: false };
+    } else if (process.env.NODE_ENV === 'production') {
+      config.ssl = { rejectUnauthorized: false };
+    }
+
+    pool = new Pool(config);
+
+    pool.on('error', (err) => {
+      console.error('Pool error:', err.message);
     });
   }
   return pool;
 }
 
-// Helper: run a query
 async function query(sql, params = []) {
-  const client = getPool();
-  const res = await client.query(sql, params);
-  return res;
+  const p = getPool();
+  try {
+    const res = await p.query(sql, params);
+    return res;
+  } catch (err) {
+    console.error('Query error:', err.message, '\nSQL:', sql.slice(0, 100));
+    throw err;
+  }
 }
 
-// Helper: get single row
 async function get(sql, params = []) {
   const res = await query(sql, params);
   return res.rows[0] || null;
 }
 
-// Helper: get all rows
 async function all(sql, params = []) {
   const res = await query(sql, params);
   return res.rows;
 }
 
-// Helper: run insert/update/delete, returns rowCount and insertId
 async function run(sql, params = []) {
   const res = await query(sql, params);
   return { rowCount: res.rowCount, rows: res.rows };
@@ -40,21 +56,20 @@ async function run(sql, params = []) {
 async function initializeSchema() {
   const bcrypt = require('bcryptjs');
 
-  await query(`
-    CREATE TABLE IF NOT EXISTS users (
+  console.log('📋 Criando tabelas...');
+
+  const tables = [
+    `CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       email TEXT UNIQUE NOT NULL,
       senha TEXT NOT NULL,
       cargo TEXT DEFAULT 'diretor',
       ativo INTEGER DEFAULT 1,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS socios (
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS socios (
       id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       email TEXT,
@@ -67,29 +82,23 @@ async function initializeSchema() {
       data_inicio TEXT,
       data_fim TEXT,
       observacoes TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS pagamentos_socios (
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS pagamentos_socios (
       id SERIAL PRIMARY KEY,
-      socio_id INTEGER NOT NULL REFERENCES socios(id) ON DELETE CASCADE,
+      socio_id INTEGER NOT NULL,
       valor NUMERIC NOT NULL,
       mes_referencia TEXT,
       ano_referencia INTEGER,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
       data_vencimento TEXT,
-      data_pagamento TIMESTAMP,
+      data_pagamento TIMESTAMPTZ,
       observacoes TEXT,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS eventos (
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS eventos (
       id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       descricao TEXT,
@@ -99,30 +108,24 @@ async function initializeSchema() {
       valor_ingresso NUMERIC DEFAULT 0,
       status TEXT DEFAULT 'ativo',
       imagem_url TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS lotes_ingresso (
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS lotes_ingresso (
       id SERIAL PRIMARY KEY,
-      evento_id INTEGER NOT NULL REFERENCES eventos(id) ON DELETE CASCADE,
+      evento_id INTEGER NOT NULL,
       nome TEXT NOT NULL,
       quantidade INTEGER DEFAULT 0,
       valor NUMERIC DEFAULT 0,
       data_inicio TEXT,
       data_fim TEXT,
       status TEXT DEFAULT 'ativo'
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS ingressos (
+    )`,
+    `CREATE TABLE IF NOT EXISTS ingressos (
       id SERIAL PRIMARY KEY,
       codigo TEXT UNIQUE NOT NULL,
-      evento_id INTEGER NOT NULL REFERENCES eventos(id),
-      lote_id INTEGER REFERENCES lotes_ingresso(id),
+      evento_id INTEGER NOT NULL,
+      lote_id INTEGER,
       nome_comprador TEXT NOT NULL,
       email_comprador TEXT,
       telefone_comprador TEXT,
@@ -131,16 +134,13 @@ async function initializeSchema() {
       valor NUMERIC NOT NULL,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
-      data_compra TIMESTAMP DEFAULT NOW(),
-      data_pagamento TIMESTAMP,
+      data_compra TIMESTAMPTZ DEFAULT NOW(),
+      data_pagamento TIMESTAMPTZ,
       transferido INTEGER DEFAULT 0,
       historico_transferencias TEXT DEFAULT '[]',
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS produtos (
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS produtos (
       id SERIAL PRIMARY KEY,
       nome TEXT NOT NULL,
       descricao TEXT,
@@ -150,13 +150,10 @@ async function initializeSchema() {
       estoque INTEGER DEFAULT 0,
       estoque_minimo INTEGER DEFAULT 5,
       ativo INTEGER DEFAULT 1,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS vendas (
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS vendas (
       id SERIAL PRIMARY KEY,
       tipo TEXT DEFAULT 'produto',
       descricao TEXT,
@@ -164,61 +161,49 @@ async function initializeSchema() {
       desconto NUMERIC DEFAULT 0,
       metodo_pagamento TEXT,
       status TEXT DEFAULT 'pago',
-      operador_id INTEGER REFERENCES users(id),
-      data_venda TIMESTAMP DEFAULT NOW(),
+      operador_id INTEGER,
+      data_venda TIMESTAMPTZ DEFAULT NOW(),
       observacoes TEXT
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS itens_venda (
+    )`,
+    `CREATE TABLE IF NOT EXISTS itens_venda (
       id SERIAL PRIMARY KEY,
-      venda_id INTEGER NOT NULL REFERENCES vendas(id) ON DELETE CASCADE,
-      produto_id INTEGER REFERENCES produtos(id),
+      venda_id INTEGER NOT NULL,
+      produto_id INTEGER,
       descricao TEXT,
       quantidade INTEGER DEFAULT 1,
       preco_unitario NUMERIC DEFAULT 0,
       subtotal NUMERIC DEFAULT 0
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS contas_pagar (
+    )`,
+    `CREATE TABLE IF NOT EXISTS contas_pagar (
       id SERIAL PRIMARY KEY,
       descricao TEXT NOT NULL,
       fornecedor TEXT,
       categoria TEXT,
       valor NUMERIC NOT NULL,
       data_vencimento TEXT NOT NULL,
-      data_pagamento TIMESTAMP,
+      data_pagamento TIMESTAMPTZ,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
       recorrente INTEGER DEFAULT 0,
       observacoes TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS contas_receber (
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS contas_receber (
       id SERIAL PRIMARY KEY,
       descricao TEXT NOT NULL,
       cliente TEXT,
       categoria TEXT,
       valor NUMERIC NOT NULL,
       data_vencimento TEXT NOT NULL,
-      data_recebimento TIMESTAMP,
+      data_recebimento TIMESTAMPTZ,
       status TEXT DEFAULT 'pendente',
       metodo_pagamento TEXT,
       observacoes TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS caixa (
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS caixa (
       id SERIAL PRIMARY KEY,
       tipo TEXT NOT NULL,
       categoria TEXT,
@@ -228,26 +213,32 @@ async function initializeSchema() {
       referencia_id INTEGER,
       saldo_anterior NUMERIC DEFAULT 0,
       saldo_posterior NUMERIC DEFAULT 0,
-      operador_id INTEGER REFERENCES users(id),
-      data_movimentacao TIMESTAMP DEFAULT NOW(),
+      operador_id INTEGER,
+      data_movimentacao TIMESTAMPTZ DEFAULT NOW(),
       observacoes TEXT
-    )
-  `);
-
-  await query(`
-    CREATE TABLE IF NOT EXISTS configuracoes (
+    )`,
+    `CREATE TABLE IF NOT EXISTS configuracoes (
       chave TEXT PRIMARY KEY,
       valor TEXT,
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+  ];
+
+  for (const sql of tables) {
+    await query(sql);
+  }
+
+  console.log('✅ Tabelas criadas');
 
   // Seed admin
   const admin = await get('SELECT id FROM users WHERE email = $1', ['admin@atletica.com']);
   if (!admin) {
     const hash = bcrypt.hashSync('admin123', 10);
-    await query('INSERT INTO users (nome, email, senha, cargo) VALUES ($1, $2, $3, $4)',
-      ['Administrador', 'admin@atletica.com', hash, 'admin']);
+    await query(
+      'INSERT INTO users (nome, email, senha, cargo) VALUES ($1, $2, $3, $4)',
+      ['Administrador', 'admin@atletica.com', hash, 'admin']
+    );
+    console.log('✅ Usuário admin criado');
   }
 
   // Seed configs
@@ -259,10 +250,13 @@ async function initializeSchema() {
     ['cor_primaria', '#6c63ff'],
   ];
   for (const [k, v] of configs) {
-    await query('INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING', [k, v]);
+    await query(
+      'INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING',
+      [k, v]
+    );
   }
 
-  console.log('✅ Schema inicializado');
+  console.log('✅ Schema inicializado com sucesso');
 }
 
 module.exports = { query, get, all, run, initializeSchema };
