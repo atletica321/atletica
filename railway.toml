@@ -3,5 +3,4 @@ builder = "dockerfile"
 
 [deploy]
 healthcheckPath = "/health"
-healthcheckTimeout = 60
-startCommand = "node server.js"
+healthcheckTimeout = 120

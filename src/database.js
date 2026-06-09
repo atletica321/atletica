@@ -4,21 +4,14 @@ let pool;
 
 function getPool() {
   if (!pool) {
-    const config = {
+    pool = new Pool({
       connectionString: process.env.DATABASE_URL,
-      connectionTimeoutMillis: 10000,
+      connectionTimeoutMillis: 15000,
       idleTimeoutMillis: 30000,
       max: 10,
-    };
-
-    // Railway PostgreSQL sempre precisa de SSL
-    if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('railway')) {
-      config.ssl = { rejectUnauthorized: false };
-    } else if (process.env.NODE_ENV === 'production') {
-      config.ssl = { rejectUnauthorized: false };
-    }
-
-    pool = new Pool(config);
+      // SSL sempre ativo — Railway PostgreSQL exige
+      ssl: { rejectUnauthorized: false },
+    });
 
     pool.on('error', (err) => {
       console.error('Pool error:', err.message);
@@ -30,10 +23,9 @@ function getPool() {
 async function query(sql, params = []) {
   const p = getPool();
   try {
-    const res = await p.query(sql, params);
-    return res;
+    return await p.query(sql, params);
   } catch (err) {
-    console.error('Query error:', err.message, '\nSQL:', sql.slice(0, 100));
+    console.error('Query error:', err.message, '\nSQL:', sql.slice(0, 120));
     throw err;
   }
 }
@@ -56,6 +48,10 @@ async function run(sql, params = []) {
 async function initializeSchema() {
   const bcrypt = require('bcryptjs');
 
+  // Testa a conexão antes de criar tabelas
+  await query('SELECT 1');
+  console.log('✅ Conexão com banco OK');
+
   console.log('📋 Criando tabelas...');
 
   const tables = [
@@ -74,7 +70,7 @@ async function initializeSchema() {
       nome TEXT NOT NULL,
       email TEXT,
       telefone TEXT,
-      matricula TEXT UNIQUE,
+      matricula TEXT,
       curso TEXT,
       plano TEXT DEFAULT 'mensal',
       valor_mensalidade NUMERIC DEFAULT 0,
@@ -227,17 +223,14 @@ async function initializeSchema() {
   for (const sql of tables) {
     await query(sql);
   }
-
   console.log('✅ Tabelas criadas');
 
   // Seed admin
   const admin = await get('SELECT id FROM users WHERE email = $1', ['admin@atletica.com']);
   if (!admin) {
     const hash = bcrypt.hashSync('admin123', 10);
-    await query(
-      'INSERT INTO users (nome, email, senha, cargo) VALUES ($1, $2, $3, $4)',
-      ['Administrador', 'admin@atletica.com', hash, 'admin']
-    );
+    await query('INSERT INTO users (nome, email, senha, cargo) VALUES ($1,$2,$3,$4)',
+      ['Administrador', 'admin@atletica.com', hash, 'admin']);
     console.log('✅ Usuário admin criado');
   }
 
@@ -251,12 +244,12 @@ async function initializeSchema() {
   ];
   for (const [k, v] of configs) {
     await query(
-      'INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING',
+      'INSERT INTO configuracoes (chave, valor) VALUES ($1,$2) ON CONFLICT (chave) DO NOTHING',
       [k, v]
     );
   }
 
-  console.log('✅ Schema inicializado com sucesso');
+  console.log('✅ Schema pronto!');
 }
 
 module.exports = { query, get, all, run, initializeSchema };
