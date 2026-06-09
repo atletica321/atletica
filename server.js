@@ -21,22 +21,21 @@ app.get('*', (req, res) =>
 );
 
 async function start() {
-  const dbUrl = process.env.DATABASE_URL;
+  // Aceita PG_URL (manual) ou DATABASE_URL (referência Railway)
+  const dbUrl = process.env.PG_URL || process.env.DATABASE_URL;
 
   if (!dbUrl) {
-    console.error('❌ DATABASE_URL não definida. Configure no Railway.');
+    console.error('❌ Nenhuma variável de banco encontrada.');
+    console.error('   Crie PG_URL ou DATABASE_URL no Railway com a connection string do PostgreSQL.');
     process.exit(1);
   }
 
-  // Loga host/porta para diagnóstico (sem expor senha)
   try {
     const u = new URL(dbUrl);
-    console.log(`🔗 Banco: ${u.hostname}:${u.port}${u.pathname} (user: ${u.username})`);
-  } catch(e) {
-    console.log('🔗 DATABASE_URL definida');
-  }
+    console.log(`🔗 Banco: ${u.hostname}:${u.port} | user: ${u.username} | db: ${u.pathname.slice(1)}`);
+  } catch(e) {}
 
-  // Sobe HTTP primeiro
+  // HTTP primeiro — healthcheck já responde
   await new Promise(resolve =>
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ HTTP na porta ${PORT}`);
@@ -44,17 +43,17 @@ async function start() {
     })
   );
 
-  // Conecta ao banco com retry
+  // Banco com retry
   const { initializeSchema } = require('./src/database');
   for (let i = 1; i <= 15; i++) {
     try {
       console.log(`🔌 Tentativa ${i}/15...`);
       await initializeSchema();
-      console.log('🎉 Tudo pronto!');
+      console.log('🎉 Sistema pronto!');
       return;
     } catch (err) {
       console.error(`⚠️  Tentativa ${i} falhou: ${err.message}`);
-      if (i === 15) { console.error('❌ Desistindo.'); process.exit(1); }
+      if (i === 15) { console.error('❌ Falha definitiva.'); process.exit(1); }
       await new Promise(r => setTimeout(r, 4000));
     }
   }

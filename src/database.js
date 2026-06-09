@@ -4,7 +4,7 @@ let pool;
 
 function getPool() {
   if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
+    const connectionString = process.env.PG_URL || process.env.DATABASE_URL;
     
     console.log('🔧 Configurando pool com URL:', connectionString.replace(/:\/\/.*@/, '://***@'));
 
